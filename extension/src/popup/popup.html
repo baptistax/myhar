@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>myhar</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header>
+        <p class="eyebrow">HAR ZIP Generator</p>
+        <h1>myhar</h1>
+        <p>Make multiple HAR files at once and export them to a ZIP file. 100% local.</p>
+      </header>
+
+      <section class="notice" aria-label="Privacy notice">
+        <strong>Local only.</strong>
+        No captured traffic is uploaded or sent to any server.
+      </section>
+
+      <button id="openCapture" type="button">Open capture workspace</button>
+
+      <footer>
+        Capture selected tabs or paste a URL list. HAR files may contain sensitive URLs, cookies, headers, and tokens.
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "myhar",
+  "short_name": "myhar",
+  "version": "0.1.6",
+  "description": "Make multiple HAR files at once and export them to a ZIP file. 100% local.",
+  "minimum_chrome_version": "120",
+  "action": {
+    "default_title": "myhar",
+    "default_popup": "src/popup/popup.html"
+  },
+  "permissions": [
+    "tabs",
+    "debugger",
+    "downloads"
+  ],
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  }
+}

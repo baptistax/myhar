@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>myhar Capture Workspace</title>
+    <link rel="stylesheet" href="capture.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">myhar · local browser capture</p>
+          <h1>HAR ZIP Generator</h1>
+          <p class="hero-copy">
+            Make multiple HAR files at once and export them to a ZIP file. 100% local.
+          </p>
+        </div>
+        <div class="local-badge" title="All captures are generated inside this browser extension page.">
+          Local only
+        </div>
+      </header>
+
+      <section class="workspace-card" aria-label="Capture actions">
+        <div class="section-title-row">
+          <div>
+            <p class="section-kicker">Open tab workflow</p>
+            <h2>Capture selected browser tabs</h2>
+          </div>
+          <span class="hint">Select HTTP/HTTPS tabs below before starting.</span>
+        </div>
+
+        <div class="action-grid" role="group" aria-label="Main capture actions">
+          <button id="startLive" class="primary" type="button">Start Live Capture</button>
+          <button id="captureRefresh" type="button">Start Refresh Capture</button>
+          <button id="stopExport" type="button" disabled>Stop &amp; Export ZIP</button>
+          <button id="stopDiscard" class="danger" type="button" disabled>Stop without Export</button>
+          <button id="refreshTabs" type="button">Refresh Tab List</button>
+          <button id="clearSelection" type="button">Clear Selection</button>
+        </div>
+      </section>
+
+      <section class="workspace-card" aria-label="URL list capture">
+        <div class="section-title-row">
+          <div>
+            <p class="section-kicker">URL list workflow</p>
+            <h2>Open URLs and capture them</h2>
+          </div>
+          <span class="hint">One URL per line. New tabs are opened by myhar and captured from navigation start.</span>
+        </div>
+
+        <textarea id="urlInput" spellcheck="false" placeholder="https://example.com/page&#10;https://docs.github.com/&#10;https://imagecolorpicker.com/color-code/2596be?skipGenerate=true"></textarea>
+        <div class="url-actions">
+          <button id="captureUrls" class="primary" type="button">Open URLs and Capture</button>
+          <button id="clearUrls" type="button">Clear URL List</button>
+        </div>
+      </section>
+
+      <details class="advanced-settings">
+        <summary>Advanced export settings</summary>
+        <div class="option-row">
+          <label>
+            <input id="includeRequestBodies" type="checkbox" checked>
+            Include request body text when Chrome exposes it
+          </label>
+          <label>
+            <input id="includeResponseBodies" type="checkbox" checked>
+            Include response content, DevTools-like, larger and sensitive
+          </label>
+          <label>
+            Max response body per resource
+            <select id="maxResponseBodyBytes">
+              <option value="1048576">1 MiB</option>
+              <option value="5242880">5 MiB</option>
+              <option value="26214400" selected>25 MiB</option>
+              <option value="0">Unlimited</option>
+            </select>
+          </label>
+          <label>
+            Capture duration limit
+            <select id="captureLimitSeconds">
+              <option value="15">15 seconds</option>
+              <option value="30" selected>30 seconds</option>
+              <option value="45">45 seconds</option>
+              <option value="60">60 seconds</option>
+            </select>
+          </label>
+        </div>
+      </details>
+
+      <section class="status-card" aria-live="polite">
+        <strong>Status:</strong>
+        <span id="statusText">Ready. Select one or more tabs, or paste URLs.</span>
+      </section>
+
+      <section id="exportCard" class="export-card" aria-label="Latest ZIP export" hidden>
+        <strong>Latest ZIP:</strong>
+        <a id="downloadLink" href="#" download>Download ZIP</a>
+        <span id="exportDetails"></span>
+      </section>
+
+      <section class="table-card" aria-label="Open tabs">
+        <div class="table-header">
+          <div>
+            <p class="section-kicker">Browser tabs</p>
+            <h2>Open tabs</h2>
+          </div>
+          <span id="tabCount">0 tabs</span>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Capture</th>
+                <th scope="col">Tab</th>
+                <th scope="col">URL</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody id="tabsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="logCard" class="log-card" aria-label="Event log" hidden>
+        <div class="table-header">
+          <h2>Debug log</h2>
+          <button id="clearLog" type="button">Clear log</button>
+        </div>
+        <pre id="logOutput"></pre>
+      </section>
+    </main>
+    <script src="capture.js"></script>
+  </body>
+</html>
