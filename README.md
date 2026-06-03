@@ -2,6 +2,11 @@
 
 myhar is a Chrome/Edge Manifest V3 extension for making multiple HAR files at once and exporting them to a ZIP file. It is 100% local: nothing is uploaded.
 
+
+*
+https://chromewebstore.google.com/detail/myhar/ecaggogjclbagdhggcihihmmagnokakn
+*
+
 The project is designed from the beginning for Chrome Web Store review hygiene:
 
 - Single purpose: export browser traffic as local HAR files inside a ZIP archive.
