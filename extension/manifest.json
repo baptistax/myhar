@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "myhar",
   "short_name": "myhar",
-  "version": "0.1.6",
+  "version": "0.1.0",
   "description": "Make multiple HAR files at once and export them to a ZIP file. 100% local.",
   "minimum_chrome_version": "120",
   "action": {
