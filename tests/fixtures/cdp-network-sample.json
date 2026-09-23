@@ -1,0 +1,397 @@
+{
+  "provenance": {
+    "url": "https://example.com/",
+    "recorded_at": "2026-09-23T14:16:09.596Z",
+    "browser": {
+      "protocolVersion": "1.3",
+      "product": "Chrome/154.0.8037.58",
+      "revision": "@a654841425914cbb703a2931e07b70a83aedbafd",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+      "jsVersion": "15.4.80.11"
+    },
+    "method": "Actual Chrome CDP Network/Page events from a clean isolated profile; document request only.",
+    "sanitization": "Cookie and authorization header values redacted; associated/blocked cookie arrays emptied. No account or private traffic."
+  },
+  "events": [
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "F218E5A948FE35801A4E48200AB27CB4",
+        "name": "commit",
+        "timestamp": 832.521415
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "F218E5A948FE35801A4E48200AB27CB4",
+        "name": "DOMContentLoaded",
+        "timestamp": 832.521539
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "F218E5A948FE35801A4E48200AB27CB4",
+        "name": "load",
+        "timestamp": 832.522475
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "F218E5A948FE35801A4E48200AB27CB4",
+        "name": "networkAlmostIdle",
+        "timestamp": 832.522335
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "F218E5A948FE35801A4E48200AB27CB4",
+        "name": "networkIdle",
+        "timestamp": 832.522335
+      }
+    },
+    {
+      "method": "Network.requestWillBeSent",
+      "params": {
+        "requestId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "documentURL": "https://example.com/",
+        "request": {
+          "url": "https://example.com/",
+          "method": "GET",
+          "headers": {
+            "Upgrade-Insecure-Requests": "1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+            "sec-ch-ua": "\"Chromium\";v=\"154\", \"Google Chrome\";v=\"154\", \"Not A(Brand\";v=\"99\"",
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": "\"Windows\""
+          },
+          "mixedContentType": "none",
+          "initialPriority": "VeryHigh",
+          "referrerPolicy": "strict-origin-when-cross-origin",
+          "isSameSite": true
+        },
+        "timestamp": 832.544365,
+        "wallTime": 1790172965.995087,
+        "initiator": {
+          "type": "other"
+        },
+        "redirectHasExtraInfo": false,
+        "type": "Document",
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "hasUserGesture": false
+      }
+    },
+    {
+      "method": "Network.requestWillBeSentExtraInfo",
+      "params": {
+        "requestId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "associatedCookies": [],
+        "headers": {
+          ":authority": "example.com",
+          ":method": "GET",
+          ":path": "/",
+          ":scheme": "https",
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-encoding": "gzip, deflate, br, zstd",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Chromium\";v=\"154\", \"Google Chrome\";v=\"154\", \"Not A(Brand\";v=\"99\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"Windows\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36"
+        },
+        "connectTiming": {
+          "requestTime": 832.545236
+        },
+        "siteHasCookieInOtherPartition": false
+      }
+    },
+    {
+      "method": "Network.responseReceivedExtraInfo",
+      "params": {
+        "requestId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "blockedCookies": [],
+        "headers": {
+          "age": "3805",
+          "allow": "GET, HEAD",
+          "cf-cache-status": "HIT",
+          "cf-ray": "a3fb89cb7b89ca7a-GIG",
+          "content-encoding": "br",
+          "content-type": "text/html",
+          "date": "Wed, 23 Sep 2026 18:16:03 GMT",
+          "last-modified": "Tue, 22 Sep 2026 21:15:25 GMT",
+          "server": "cloudflare"
+        },
+        "resourceIPAddressSpace": "Public",
+        "statusCode": 200,
+        "cookiePartitionKey": {
+          "topLevelSite": "https://example.com",
+          "hasCrossSiteAncestor": false
+        },
+        "cookiePartitionKeyOpaque": false,
+        "exemptedCookies": []
+      }
+    },
+    {
+      "method": "Network.responseReceived",
+      "params": {
+        "requestId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "timestamp": 832.638502,
+        "type": "Document",
+        "response": {
+          "url": "https://example.com/",
+          "status": 200,
+          "statusText": "",
+          "headers": {
+            "age": "3805",
+            "allow": "GET, HEAD",
+            "cf-cache-status": "HIT",
+            "cf-ray": "a3fb89cb7b89ca7a-GIG",
+            "content-encoding": "br",
+            "content-type": "text/html",
+            "date": "Wed, 23 Sep 2026 18:16:03 GMT",
+            "last-modified": "Tue, 22 Sep 2026 21:15:25 GMT",
+            "server": "cloudflare"
+          },
+          "mimeType": "text/html",
+          "charset": "",
+          "connectionReused": false,
+          "connectionId": 738,
+          "remoteIPAddress": "172.66.147.243",
+          "remotePort": 443,
+          "fromDiskCache": false,
+          "fromServiceWorker": false,
+          "fromPrefetchCache": false,
+          "encodedDataLength": 473,
+          "timing": {
+            "requestTime": 832.545236,
+            "proxyStart": -1,
+            "proxyEnd": -1,
+            "dnsStart": 0,
+            "dnsEnd": 12.525,
+            "connectStart": 13.025,
+            "connectEnd": 56.56,
+            "sslStart": 25.755,
+            "sslEnd": 56.552,
+            "workerStart": -1,
+            "workerReady": -1,
+            "workerFetchStart": -1,
+            "workerRespondWithSettled": -1,
+            "sendStart": 56.668,
+            "sendEnd": 56.873,
+            "pushStart": 0,
+            "pushEnd": 0,
+            "receiveHeadersStart": 92.036,
+            "receiveHeadersEnd": 92.363
+          },
+          "responseTime": 1790172966087.998,
+          "protocol": "h2",
+          "alternateProtocolUsage": "unspecifiedReason",
+          "securityState": "secure",
+          "securityDetails": {
+            "protocol": "TLS 1.3",
+            "keyExchange": "",
+            "keyExchangeGroup": "X25519MLKEM768",
+            "cipher": "AES_128_GCM",
+            "certificateId": 0,
+            "subjectName": "example.com",
+            "sanList": [
+              "example.com",
+              "*.example.com"
+            ],
+            "issuer": "Cloudflare TLS Issuing ECC CA 3",
+            "validFrom": 1785363008,
+            "validTo": 1793139441,
+            "signedCertificateTimestampList": [
+              {
+                "status": "Verified",
+                "origin": "Embedded in certificate",
+                "logDescription": "DigiCert 'Sphinx2026h2'",
+                "logId": "944E4387FAECC1EF81F3192426A8186501C7D35F3802013F72677D55372E19D8",
+                "timestamp": 1785363612470,
+                "hashAlgorithm": "SHA-256",
+                "signatureAlgorithm": "ECDSA",
+                "signatureData": "3046022100FD585A2D446CD64632D4A4ABB95201551085B6241ECCB6F65EFADA1C48D81CC90221009085743A02584F7D26314A4A6CE379185B887D0CDC0C3E878D78CBD6C6C53F8F"
+              },
+              {
+                "status": "Verified",
+                "origin": "Embedded in certificate",
+                "logDescription": "Sectigo 'Tiger2026h2'",
+                "logId": "C8A3C47FC7B3ADB9356B013F6A7A126DE33A4E43A5C646F997AD3975991DCF9A",
+                "timestamp": 1785363612492,
+                "hashAlgorithm": "SHA-256",
+                "signatureAlgorithm": "ECDSA",
+                "signatureData": "304402200AA6B3ED8CC40B94BAD292CE1E083A0967A5AA7A444B1FA0161D21DCA3D2D7B5022032C46136D6F0D06A7D43422D641E43FF4A93CEB3CA3010DB259A2BF8D66471EE"
+              },
+              {
+                "status": "Verified",
+                "origin": "TLS extension",
+                "logDescription": "Google 'Argon2026h2' log",
+                "logId": "D76D7D10D1A7F577C2C7E95FD700BFF982C9335A65E1D0B3017317C0C8C56977",
+                "timestamp": 1785363619316,
+                "hashAlgorithm": "SHA-256",
+                "signatureAlgorithm": "ECDSA",
+                "signatureData": "3046022100A4BF9629EC5B5FB610C5AE23E59772AC0678A907B1A87B1ABD1EED713429D1D202210097518510A4189913575E1C86552BD468D61A55350D67F59CAD03FD505A4F8C10"
+              },
+              {
+                "status": "Verified",
+                "origin": "TLS extension",
+                "logDescription": "Google 'Xenon2026h2' log",
+                "logId": "D809553B944F7AFFC816196F944F85ABB0F8FC5E8755260F15D12E72BB454B14",
+                "timestamp": 1785363619418,
+                "hashAlgorithm": "SHA-256",
+                "signatureAlgorithm": "ECDSA",
+                "signatureData": "3045022100BDBAA5BE08E4132202D669262FAC14ABFCB874B233DDBB0FE8D3C3389D7F5CE102200BB8C2A61E697626649837BCB6432B038E5B32070DDD54D18F60DCE42E282845"
+              }
+            ],
+            "certificateTransparencyCompliance": "compliant",
+            "serverSignatureAlgorithm": 1027,
+            "encryptedClientHello": false
+          }
+        },
+        "hasExtraInfo": true,
+        "frameId": "4E07DA47B17E652436F995CB2F58B611"
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "name": "init",
+        "timestamp": 832.642139
+      }
+    },
+    {
+      "method": "Page.frameNavigated",
+      "params": {
+        "frame": {
+          "id": "4E07DA47B17E652436F995CB2F58B611",
+          "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+          "url": "https://example.com/",
+          "domainAndRegistry": "example.com",
+          "securityOrigin": "https://example.com",
+          "securityOriginDetails": {
+            "isLocalhost": false
+          },
+          "mimeType": "text/html",
+          "adFrameStatus": {
+            "adFrameType": "none"
+          },
+          "secureContextType": "Secure",
+          "crossOriginIsolatedContextType": "NotIsolated",
+          "gatedAPIFeatures": []
+        },
+        "type": "Navigation"
+      }
+    },
+    {
+      "method": "Network.dataReceived",
+      "params": {
+        "requestId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "timestamp": 832.642987,
+        "dataLength": 559,
+        "encodedDataLength": 0
+      }
+    },
+    {
+      "method": "Network.loadingFinished",
+      "params": {
+        "requestId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "timestamp": 832.63799,
+        "encodedDataLength": 473
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "name": "DOMContentLoaded",
+        "timestamp": 832.64982
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "name": "load",
+        "timestamp": 832.650283
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "name": "firstMeaningfulPaintCandidate",
+        "timestamp": 832.668659
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "name": "firstContentfulPaint",
+        "timestamp": 832.668659
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "name": "firstPaint",
+        "timestamp": 832.668659
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "name": "networkAlmostIdle",
+        "timestamp": 832.650055
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "name": "firstMeaningfulPaint",
+        "timestamp": 832.668659
+      }
+    },
+    {
+      "method": "Page.lifecycleEvent",
+      "params": {
+        "frameId": "4E07DA47B17E652436F995CB2F58B611",
+        "loaderId": "D77FA6CAADE22468FF664D60A50A71AC",
+        "name": "networkIdle",
+        "timestamp": 832.650055
+      }
+    }
+  ],
+  "responseBody": {
+    "body": "<!doctype html><html lang=\"en\"><head><title>Example Domain</title><link rel=\"icon\" href=\"data:,\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>body{background:#eee;width:60vw;margin:15vh auto;font-family:system-ui,sans-serif}h1{font-size:1.5em}div{opacity:0.8}a:link,a:visited{color:#348}</style></head><body><div><h1>Example Domain</h1><p>This domain is for use in documentation examples without needing permission. Avoid use in operations.</p><p><a href=\"https://iana.org/domains/example\">Learn more</a></p></div></body></html>\n",
+    "base64Encoded": false
+  }
+}

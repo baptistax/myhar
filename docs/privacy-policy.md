@@ -31,7 +31,7 @@ The extension does not load or execute remotely hosted JavaScript. All executabl
 
 ## User control
 
-Capture starts only after the user selects tabs, pastes URLs, and presses a capture button. The user can stop a live capture manually. Refresh and URL-list captures are limited by network quiet detection and a user-visible capture duration limit.
+Capture starts only after the user selects tabs, pastes URLs, and presses a capture button. The user can stop any capture manually. Refresh and URL-list captures auto-export after a configurable continuous network quiet interval (15 seconds by default), even when long-lived requests remain open. Actual network activity resets the interval. Export preserves unfinished requests and waits for pending body collection. Live Capture remains manual. There is no total capture-duration cutoff. Internal memory safety protection remains active.
 
 ## Sensitive data warning
 
@@ -40,6 +40,8 @@ Generated HAR files may contain sensitive information such as cookies, session t
 ## Data retention
 
 The extension does not retain captured traffic after the ZIP is generated and downloaded. Any retained copy exists only where the user's browser downloads the ZIP file.
+
+After the user clicks **Got it** on the automatic-capture notice, the extension stores only the value `acknowledged` under the versioned localStorage key `myhar.autoCaptureNotice.v1`. This local UX preference contains no URLs, tab IDs, titles, traffic or capture results. Failure to store or read it does not affect capture.
 
 ## Third-party services
 

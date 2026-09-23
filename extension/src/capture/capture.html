@@ -67,23 +67,23 @@
             <input id="includeResponseBodies" type="checkbox" checked>
             Include response content, DevTools-like, larger and sensitive
           </label>
-          <label>
+          <label class="setting-with-help">
             Max response body per resource
-            <select id="maxResponseBodyBytes">
+            <select id="maxResponseBodyBytes" aria-describedby="bodyLimitHelp">
               <option value="1048576">1 MiB</option>
               <option value="5242880">5 MiB</option>
               <option value="26214400" selected>25 MiB</option>
-              <option value="0">Unlimited</option>
+              <option value="52428800">50 MiB</option>
+              <option value="0">No myhar limit</option>
             </select>
+            <span id="bodyLimitHelp" class="hint">Browser/CDP buffer limits may still apply.</span>
           </label>
-          <label>
-            Capture duration limit
-            <select id="captureLimitSeconds">
-              <option value="15">15 seconds</option>
-              <option value="30" selected>30 seconds</option>
-              <option value="45">45 seconds</option>
-              <option value="60">60 seconds</option>
-            </select>
+          <label class="setting-with-help">
+            Network quiet timeout
+            <input id="networkQuietTimeoutSeconds" type="number" value="15" step="any" required aria-describedby="networkQuietHelp networkQuietError">
+            <span>seconds</span>
+            <span id="networkQuietHelp" class="hint">Auto-export after the network stays quiet for this long. Refresh and URL-list captures only.</span>
+            <span id="networkQuietError" class="setting-error" role="alert" hidden></span>
           </label>
         </div>
       </details>
@@ -91,6 +91,15 @@
       <section class="status-card" aria-live="polite">
         <strong>Status:</strong>
         <span id="statusText">Ready. Select one or more tabs, or paste URLs.</span>
+      </section>
+
+      <section id="autoCaptureNotice" class="auto-capture-notice" aria-labelledby="autoCaptureNoticeTitle" hidden>
+        <div role="status">
+          <h2 id="autoCaptureNoticeTitle">Automatic capture</h2>
+          <p id="autoCaptureNoticeText"></p>
+          <p>You can change this in Advanced export settings.</p>
+        </div>
+        <button id="acknowledgeAutoCaptureNotice" type="button">Got it</button>
       </section>
 
       <section id="exportCard" class="export-card" aria-label="Latest ZIP export" hidden>
@@ -130,6 +139,6 @@
         <pre id="logOutput"></pre>
       </section>
     </main>
-    <script src="capture.js"></script>
+    <script type="module" src="capture.js"></script>
   </body>
 </html>

@@ -1,11 +1,11 @@
+import { TabCaptureSession, CaptureBudget, chromeCall } from './capture-session.js';
+import { buildCaptureZip } from './zip-builder.js';
+import { DEFAULT_NETWORK_QUIET_TIMEOUT_SECONDS, isNetworkQuietMode, parseNetworkQuietTimeoutSeconds } from './capture-policy.js';
+
 'use strict';
 
-const DEVTOOLS_PROTOCOL_VERSION = '1.3';
-const DEFAULT_CAPTURE_IDLE_MS = 5000;
-const ROOT_PREFIX = 'myhar';
-const MIN_CAPTURE_LIMIT_SECONDS = 5;
 const DEBUG_LOG_ENABLED = new URLSearchParams(window.location.search).get('debug') === '1';
-
+const AUTO_CAPTURE_NOTICE_KEY = 'myhar.autoCaptureNotice.v1';
 
 const elements = {
   refreshTabs: document.getElementById('refreshTabs'),
@@ -20,8 +20,12 @@ const elements = {
   includeRequestBodies: document.getElementById('includeRequestBodies'),
   includeResponseBodies: document.getElementById('includeResponseBodies'),
   maxResponseBodyBytes: document.getElementById('maxResponseBodyBytes'),
-  captureLimitSeconds: document.getElementById('captureLimitSeconds'),
+  networkQuietTimeoutSeconds: document.getElementById('networkQuietTimeoutSeconds'),
+  networkQuietError: document.getElementById('networkQuietError'),
   statusText: document.getElementById('statusText'),
+  autoCaptureNotice: document.getElementById('autoCaptureNotice'),
+  autoCaptureNoticeText: document.getElementById('autoCaptureNoticeText'),
+  acknowledgeAutoCaptureNotice: document.getElementById('acknowledgeAutoCaptureNotice'),
   tabCount: document.getElementById('tabCount'),
   tabsBody: document.getElementById('tabsBody'),
   logCard: document.getElementById('logCard'),
@@ -42,6 +46,7 @@ let myharCreatedTabIds = new Set();
 let workspaceInitialized = false;
 let eventListenerRegistered = false;
 let activeExportObjectUrl = null;
+let autoCaptureNoticeAcknowledged = false;
 
 class CaptureCoordinator {
   constructor(options) {
@@ -49,36 +54,57 @@ class CaptureCoordinator {
     this.includeRequestBodies = options.includeRequestBodies;
     this.includeResponseBodies = options.includeResponseBodies;
     this.maxResponseBodyBytes = options.maxResponseBodyBytes;
-    this.captureLimitMs = options.captureLimitSeconds * 1000;
+    // Snapshot at startup; Live Capture has no automatic quiet policy.
+    this.networkQuietTimeoutSeconds = isNetworkQuietMode(this.mode) ? options.networkQuietTimeoutSeconds : null;
     this.navigationTargets = options.navigationTargets || new Map();
     this.sessions = new Map();
     this.startedAt = new Date();
     this.stopped = false;
     this.exported = false;
     this.quietTimer = null;
-    this.limitTimer = null;
     this.skippedTabs = [];
+    this.starting = false;
+    this.stopReason = null;
+    this.budget = new CaptureBudget(() => this.handleSafetyLimit());
+    const hidden = document.visibilityState === 'hidden';
+    this.visibility = { started_hidden: hidden, hidden_during_capture: hidden, hidden_duration_ms: 0 };
+    this.hiddenSince = hidden ? performance.now() : null;
+    this.onVisibilityChange = () => this.trackVisibility();
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
   }
 
   async start(tabIds) {
+    this.starting = true;
     ensureDebuggerEventListener();
     setBusyState(true, this.mode);
     setStatus(`Starting ${this.mode} capture for ${tabIds.length} tab(s).`);
+    showAutoCaptureNotice(this.mode, this.networkQuietTimeoutSeconds);
 
     for (const tabId of tabIds) {
+      if (this.pendingStopReason || this.pendingDiscard) break;
       const tab = openTabs.find((candidate) => candidate.id === tabId);
       if (!tab) {
         continue;
       }
 
-      const session = new TabCaptureSession(tab, this.includeRequestBodies, this.includeResponseBodies, this.maxResponseBodyBytes);
+      const session = new TabCaptureSession(tab, this.includeRequestBodies, this.includeResponseBodies, this.maxResponseBodyBytes,
+        { budget: this.budget, log: logLine });
+      // Register before enabling domains so early events/detaches cannot be lost.
+      this.sessions.set(tabId, session);
       try {
         await session.attach();
-        this.sessions.set(tabId, session);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (session.attached && session.detached) {
+          // A target can disappear while domains are still being enabled. Keep
+          // its captured data and actual detach reason in the final export.
+          logLine(`Tab ${tabId} detached during setup: ${message}`);
+          renderTabs();
+          continue;
+        }
         session.status = attachmentFailureStatus(message);
         await session.detachSafely().catch(() => {});
+        this.sessions.delete(tabId);
         this.skippedTabs.push({
           tab,
           status: session.status,
@@ -89,6 +115,9 @@ class CaptureCoordinator {
       renderTabs();
     }
 
+    this.starting = false;
+    if (this.pendingDiscard) { await this.stopWithoutExport(this.pendingDiscard); return; }
+    if (this.pendingStopReason) { await this.stopAndExport(this.pendingStopReason); return; }
     if (this.sessions.size === 0) {
       throw new Error('No selected tabs could be attached. Close DevTools or any other debugger attached to the selected tab, then try again.');
     }
@@ -97,14 +126,16 @@ class CaptureCoordinator {
       logLine(`${this.skippedTabs.length} selected tab(s) were skipped because they could not be attached.`);
     }
 
+    if (this.allSessionsDetached()) { await this.stopAndExport(this.detachStopReason()); return; }
+
     if (this.mode === 'refresh') {
       await this.reloadAttachedTabs();
-      this.scheduleRefreshAutoStop();
+      this.scheduleNetworkQuietAutoStop();
     } else if (this.mode === 'url-list') {
       await this.navigateAttachedTabs();
-      this.scheduleRefreshAutoStop();
+      this.scheduleNetworkQuietAutoStop();
     } else {
-      setStatus('Live capture is running. Navigate selected tabs, then stop and export.');
+      setStatus('Live capture is running · Stop & Export when finished.');
     }
   }
 
@@ -114,7 +145,8 @@ class CaptureCoordinator {
     for (const tabId of this.sessions.keys()) {
       const session = this.sessions.get(tabId);
       const targetUrl = this.navigationTargets.get(tabId);
-      if (!targetUrl || !session) {
+      if (this.stopped) return;
+      if (!targetUrl || !session || session.detached) {
         continue;
       }
 
@@ -126,24 +158,16 @@ class CaptureCoordinator {
       }
 
       try {
-        await chromeCall(chrome.debugger.sendCommand, { tabId }, 'Page.navigate', { url: targetUrl });
-        session.status = 'navigated';
+        session.lastNetworkActivityAt = performance.now();
+        await session.navigate(targetUrl);
       } catch (error) {
-        const debuggerMessage = error instanceof Error ? error.message : String(error);
-        try {
-          await chromeCall(chrome.tabs.update, tabId, { url: targetUrl });
-          session.status = 'navigated';
-          logLine(`Debugger navigation failed for tab ${tabId}; chrome.tabs.update fallback was used: ${debuggerMessage}`);
-        } catch (fallbackError) {
-          const message = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-          session.status = `navigation failed: ${message}`;
-          logLine(`Navigation failed for tab ${tabId}: ${message}`);
-        }
+        session.status = `navigation failed: ${error.message}`;
+        logLine(`Navigation failed for tab ${tabId}: ${error.message}`);
       }
     }
 
     renderTabs();
-    setStatus('URL capture is running. Export starts automatically after network quiet or the duration limit.');
+    if (!this.stopped) setStatus(`Capturing URLs · Auto-export after ${this.networkQuietTimeoutSeconds}s of network quiet.`);
   }
 
   async reloadAttachedTabs() {
@@ -151,56 +175,41 @@ class CaptureCoordinator {
 
     for (const tabId of this.sessions.keys()) {
       const session = this.sessions.get(tabId);
+      if (this.stopped) return;
+      if (session.detached) continue;
       try {
-        await chromeCall(chrome.debugger.sendCommand, { tabId }, 'Page.reload', { ignoreCache: true });
-        if (session) {
-          session.status = 'reloaded';
-        }
+        session.lastNetworkActivityAt = performance.now();
+        await session.reload();
       } catch (error) {
-        const debuggerMessage = error instanceof Error ? error.message : String(error);
-        try {
-          await chromeCall(chrome.tabs.reload, tabId, { bypassCache: true });
-          if (session) {
-            session.status = 'reloaded';
-          }
-          logLine(`Debugger reload failed for tab ${tabId}; chrome.tabs.reload fallback was used: ${debuggerMessage}`);
-        } catch (fallbackError) {
-          const message = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-          if (session) {
-            session.status = `reload failed: ${message}`;
-          }
-          logLine(`Reload failed for tab ${tabId}: ${message}`);
-        }
+        session.status = `reload failed: ${error.message}`;
+        logLine(`Reload failed for tab ${tabId}: ${error.message}`);
       }
     }
 
     renderTabs();
-    setStatus('Refresh capture is running. Wait for automatic export after network quiet or the duration limit; early manual export can be partial.');
+    if (!this.stopped) setStatus(`Capturing refreshed tabs · Auto-export after ${this.networkQuietTimeoutSeconds}s of network quiet.`);
   }
 
-  scheduleRefreshAutoStop() {
+  scheduleNetworkQuietAutoStop() {
+    if (this.stopped || !isNetworkQuietMode(this.mode)) return;
+    this.clearTimers();
     const checkQuiet = () => {
       if (this.stopped) {
         return;
       }
 
       const now = performance.now();
-      const allQuiet = Array.from(this.sessions.values()).every((session) => session.isQuiet(now, DEFAULT_CAPTURE_IDLE_MS));
-      const hasRequests = Array.from(this.sessions.values()).some((session) => session.completedEntries.length > 0 || session.records.size > 0);
-      if (allQuiet && hasRequests) {
-        this.stopAndExport('network quiet').catch((error) => showError(error));
+      const allQuiet = Array.from(this.sessions.values()).every((session) => session.isQuiet(now, this.networkQuietTimeoutSeconds));
+      if (allQuiet) {
+        this.stopAndExport('network_quiet').catch((error) => showError(error));
         return;
       }
 
       this.quietTimer = setTimeout(checkQuiet, 1000);
     };
 
-    this.quietTimer = setTimeout(checkQuiet, DEFAULT_CAPTURE_IDLE_MS);
-    this.limitTimer = setTimeout(() => {
-      if (!this.stopped) {
-        this.stopAndExport('duration limit').catch((error) => showError(error));
-      }
-    }, this.captureLimitMs);
+    // Always use bounded checks, even for values above JavaScript timer limits.
+    this.quietTimer = setTimeout(checkQuiet, 1000);
   }
 
   handleDebuggerEvent(tabId, method, params) {
@@ -219,9 +228,55 @@ class CaptureCoordinator {
       return;
     }
 
-    session.status = `detached: ${reason || 'unknown'}`;
-    session.detached = true;
+    session.handleDetach(reason).catch((error) => logLine(error.message));
     updateTabStatus(tabId, session.getUiStatus());
+    if (!this.stopped && !this.starting && this.allSessionsDetached()) {
+      this.stopAndExport(this.detachStopReason()).catch(showError);
+    }
+  }
+
+  allSessionsDetached() {
+    return this.sessions.size > 0 && Array.from(this.sessions.values()).every((session) => session.detached);
+  }
+
+  detachStopReason() {
+    const reasons = Array.from(this.sessions.values(), (session) => session.detachReason);
+    if (reasons.includes('canceled_by_user')) return 'debugger_detached_by_user';
+    return reasons.every((reason) => reason === 'target_closed') ? 'all_targets_closed' : 'debugger_detached';
+  }
+
+  hasCapturedContent() {
+    return Array.from(this.sessions.values()).some((session) => session.allRecords.length > 0);
+  }
+
+  handleSafetyLimit() {
+    if (this.exported) return;
+    if (this.stopped) { this.stopReason = 'memory_safety_limit'; return; }
+    setStatus('Memory safety limit reached. Stopping capture and exporting available requests.');
+    this.stopAndExport('memory_safety_limit').catch(showError);
+  }
+
+  trackVisibility() {
+    const now = performance.now();
+    if (document.visibilityState === 'hidden') {
+      this.visibility.hidden_during_capture = true;
+      this.hiddenSince ??= now;
+    } else if (this.hiddenSince !== null) {
+      this.visibility.hidden_duration_ms += now - this.hiddenSince;
+      this.hiddenSince = null;
+    }
+  }
+
+  finishVisibility() {
+    if (this.hiddenSince !== null) {
+      this.visibility.hidden_duration_ms += performance.now() - this.hiddenSince;
+      this.hiddenSince = null;
+    }
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+  }
+
+  visibilitySnapshot() {
+    return { ...this.visibility, hidden_duration_ms: Math.round(this.visibility.hidden_duration_ms) };
   }
 
   async stopAndExport(reason) {
@@ -229,22 +284,26 @@ class CaptureCoordinator {
       return;
     }
 
-    const hasEntries = Array.from(this.sessions.values()).some((session) => session.completedEntries.length > 0 || session.records.size > 0);
-    if (this.mode === 'refresh' && reason === 'manual stop' && !hasEntries) {
-      setStatus('Refresh capture has not seen network requests yet. Wait for automatic export, or use Stop without Export to cancel.');
-      return;
-    }
+    if (this.starting) { this.pendingStopReason = reason; return; }
 
+    const hasEntries = this.hasCapturedContent();
     this.stopped = true;
+    this.stopReason = reason || 'manual_export';
     this.clearTimers();
+    this.finishVisibility();
     if (!hasEntries) {
       logLine('No network requests were captured before export. The HAR files may be empty; try live capture, URL list capture, or reload/navigate the tab manually.');
     }
-    setStatus(`Stopping capture (${reason || 'manual'}). Building HAR files.`);
+    setStatus(this.stopReason === 'network_quiet'
+      ? `Network quiet for ${this.networkQuietTimeoutSeconds} seconds. Building HAR files.`
+      : `Stopping capture (${stopReasonLabel(this.stopReason)}). Building HAR files.`);
 
     let zipFile;
     try {
-      zipFile = await buildCaptureZip(this);
+      zipFile = await buildCaptureZip(this, chrome.runtime.getManifest().version);
+    } catch (error) {
+      setBusyState(false);
+      throw error;
     } finally {
       for (const session of this.sessions.values()) {
         await session.detachSafely();
@@ -255,9 +314,9 @@ class CaptureCoordinator {
     this.exported = true;
     setBusyState(false);
     if (downloadResult.automatic) {
-      setStatus(`Export completed: ${zipFile.fileName}`);
+      setStatus(`Export completed: ${zipFile.manifest.captures.length} HAR files · ${zipFile.manifest.entries_total.toLocaleString()} requests · ${stopReasonLabel(this.stopReason)}`);
     } else {
-      setStatus(`ZIP built: ${zipFile.fileName}. Use the visible download link if the browser did not start the download automatically.`);
+      setStatus(`Export ready: ${zipFile.manifest.captures.length} HAR files · ${zipFile.manifest.entries_total.toLocaleString()} requests · ${stopReasonLabel(this.stopReason)}. Use the download link.`);
     }
     renderTabs();
   }
@@ -266,13 +325,18 @@ class CaptureCoordinator {
     if (this.stopped) {
       return;
     }
+    if (this.starting) { this.pendingDiscard = reason; return; }
 
     this.stopped = true;
+    this.stopReason = reason;
     this.clearTimers();
+    this.finishVisibility();
     setStatus(`Stopping capture without export (${reason || 'manual'}).`);
 
     for (const session of this.sessions.values()) {
       await session.detachSafely();
+      await session.flushOpenRecords();
+      session.releaseRecords();
     }
 
     setBusyState(false);
@@ -285,553 +349,7 @@ class CaptureCoordinator {
       clearTimeout(this.quietTimer);
       this.quietTimer = null;
     }
-
-    if (this.limitTimer) {
-      clearTimeout(this.limitTimer);
-      this.limitTimer = null;
-    }
   }
-}
-
-class TabCaptureSession {
-  constructor(tab, includeRequestBodies, includeResponseBodies, maxResponseBodyBytes) {
-    this.tab = tab;
-    this.includeRequestBodies = includeRequestBodies;
-    this.includeResponseBodies = includeResponseBodies;
-    this.maxResponseBodyBytes = maxResponseBodyBytes;
-    this.status = 'pending';
-    this.detached = false;
-    this.attached = false;
-    this.records = new Map();
-    this.pendingRequestExtraInfo = new Map();
-    this.pendingResponseExtraInfo = new Map();
-    this.completedEntries = [];
-    this.pendingFinalizations = new Set();
-    this.redirectCounters = new Map();
-    this.startedAt = new Date();
-    this.lastActivityAt = performance.now();
-    this.pageRef = `page_${tab.id}`;
-    this.pageStartedDateTime = new Date().toISOString();
-  }
-
-  async attach() {
-    this.status = 'attaching';
-    renderTabs();
-
-    await chromeCall(chrome.debugger.attach, { tabId: this.tab.id }, DEVTOOLS_PROTOCOL_VERSION);
-    this.attached = true;
-    this.status = 'attached';
-
-    await chromeCall(chrome.debugger.sendCommand, { tabId: this.tab.id }, 'Network.enable', {
-      maxTotalBufferSize: 200000000,
-      maxResourceBufferSize: 100000000,
-      maxPostDataSize: 10485760
-    });
-    await chromeCall(chrome.debugger.sendCommand, { tabId: this.tab.id }, 'Page.enable', {});
-
-    logLine(`Attached debugger to tab ${this.tab.id}: ${this.tab.title || this.tab.url}`);
-  }
-
-  handleEvent(method, params) {
-    this.lastActivityAt = performance.now();
-
-    switch (method) {
-      case 'Network.requestWillBeSent':
-        this.handleRequestWillBeSent(params);
-        break;
-      case 'Network.requestWillBeSentExtraInfo':
-        this.handleRequestExtraInfo(params);
-        break;
-      case 'Network.responseReceived':
-        this.handleResponseReceived(params);
-        break;
-      case 'Network.responseReceivedExtraInfo':
-        this.handleResponseExtraInfo(params);
-        break;
-      case 'Network.loadingFinished':
-        this.handleLoadingFinished(params);
-        break;
-      case 'Network.loadingFailed':
-        this.handleLoadingFailed(params);
-        break;
-      default:
-        break;
-    }
-  }
-
-  handleRequestWillBeSent(params) {
-    const existingRecord = this.records.get(params.requestId);
-    if (existingRecord && params.redirectResponse) {
-      existingRecord.response = params.redirectResponse;
-      existingRecord.endTimestamp = params.timestamp;
-      existingRecord.redirectedTo = params.request.url;
-      existingRecord.finishedReason = 'redirect';
-      this.finalizeRecord(params.requestId, existingRecord);
-    }
-
-    const recordKey = params.requestId;
-    const record = {
-      requestId: params.requestId,
-      loaderId: params.loaderId || '',
-      documentURL: params.documentURL || '',
-      frameId: params.frameId || '',
-      type: params.type || '',
-      initiator: params.initiator || null,
-      request: params.request || {},
-      requestHeaders: clonePlainObject(params.request?.headers || {}),
-      requestHasPostData: Boolean(params.request?.hasPostData),
-      requestPostData: this.includeRequestBodies ? params.request?.postData || '' : '',
-      requestPostDataError: '',
-      response: null,
-      responseHeaders: {},
-      responseStatusCode: null,
-      responseHeadersText: '',
-      requestHeadersText: '',
-      startTimestamp: params.timestamp,
-      wallTime: params.wallTime || null,
-      responseTimestamp: null,
-      endTimestamp: null,
-      encodedDataLength: 0,
-      failed: false,
-      errorText: '',
-      canceled: false,
-      finishedReason: '',
-      redirectedTo: '',
-      responseBodyText: undefined,
-      responseBodyBase64Encoded: false,
-      responseBodySize: null,
-      responseBodyError: '',
-      responseBodyOmittedReason: '',
-      sequence: this.completedEntries.length + this.records.size + 1
-    };
-
-    const pendingRequestExtra = this.pendingRequestExtraInfo.get(params.requestId);
-    if (pendingRequestExtra) {
-      applyRequestExtraInfo(record, pendingRequestExtra);
-      this.pendingRequestExtraInfo.delete(params.requestId);
-    }
-
-    const pendingResponseExtra = this.pendingResponseExtraInfo.get(params.requestId);
-    if (pendingResponseExtra) {
-      applyResponseExtraInfo(record, pendingResponseExtra);
-      this.pendingResponseExtraInfo.delete(params.requestId);
-    }
-
-    this.records.set(recordKey, record);
-    this.status = 'capturing';
-  }
-
-  handleRequestExtraInfo(params) {
-    const record = this.records.get(params.requestId);
-    if (!record) {
-      this.pendingRequestExtraInfo.set(params.requestId, params);
-      return;
-    }
-
-    applyRequestExtraInfo(record, params);
-  }
-
-  handleResponseReceived(params) {
-    const record = this.records.get(params.requestId);
-    if (!record) {
-      return;
-    }
-
-    record.response = params.response || null;
-    record.responseHeaders = clonePlainObject(params.response?.headers || {});
-    record.responseTimestamp = params.timestamp;
-    record.type = params.type || record.type;
-  }
-
-  handleResponseExtraInfo(params) {
-    const record = this.records.get(params.requestId);
-    if (!record) {
-      this.pendingResponseExtraInfo.set(params.requestId, params);
-      return;
-    }
-
-    applyResponseExtraInfo(record, params);
-  }
-
-  handleLoadingFinished(params) {
-    const record = this.records.get(params.requestId);
-    if (!record) {
-      return;
-    }
-
-    record.endTimestamp = params.timestamp;
-    record.encodedDataLength = params.encodedDataLength || 0;
-    record.finishedReason = 'finished';
-    this.finalizeRecord(params.requestId, record);
-  }
-
-  handleLoadingFailed(params) {
-    const record = this.records.get(params.requestId);
-    if (!record) {
-      return;
-    }
-
-    record.endTimestamp = params.timestamp;
-    record.failed = true;
-    record.canceled = Boolean(params.canceled);
-    record.errorText = params.errorText || '';
-    record.finishedReason = 'failed';
-    this.finalizeRecord(params.requestId, record);
-  }
-
-  finalizeRecord(requestId, record) {
-    this.records.delete(requestId);
-
-    const finalizePromise = this.enrichAndStoreRecord(record)
-      .catch((error) => {
-        record.responseBodyError = error instanceof Error ? error.message : String(error);
-        this.completedEntries.push(buildHarEntry(record, this.pageRef));
-      })
-      .finally(() => {
-        this.pendingFinalizations.delete(finalizePromise);
-      });
-
-    this.pendingFinalizations.add(finalizePromise);
-  }
-
-  async enrichAndStoreRecord(record) {
-    await this.collectRequestPostData(record);
-    await this.collectResponseBody(record);
-    this.completedEntries.push(buildHarEntry(record, this.pageRef));
-  }
-
-  async collectRequestPostData(record) {
-    if (!this.includeRequestBodies || !record.requestHasPostData || record.requestPostData) {
-      return;
-    }
-
-    try {
-      const result = await chromeCall(chrome.debugger.sendCommand, { tabId: this.tab.id }, 'Network.getRequestPostData', {
-        requestId: record.requestId
-      });
-      if (result && typeof result.postData === 'string') {
-        record.requestPostData = result.postData;
-      }
-    } catch (error) {
-      record.requestPostDataError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  async collectResponseBody(record) {
-    if (!this.includeResponseBodies || record.failed || record.finishedReason !== 'finished') {
-      return;
-    }
-
-    try {
-      const result = await chromeCall(chrome.debugger.sendCommand, { tabId: this.tab.id }, 'Network.getResponseBody', {
-        requestId: record.requestId
-      });
-
-      if (!result || typeof result.body !== 'string') {
-        return;
-      }
-
-      const bodySize = result.base64Encoded ? base64DecodedSize(result.body) : textToBytes(result.body).length;
-      record.responseBodySize = bodySize;
-
-      if (this.maxResponseBodyBytes > 0 && bodySize > this.maxResponseBodyBytes) {
-        record.responseBodyOmittedReason = `response body exceeded ${this.maxResponseBodyBytes} byte limit`;
-        return;
-      }
-
-      record.responseBodyText = result.body;
-      record.responseBodyBase64Encoded = Boolean(result.base64Encoded);
-    } catch (error) {
-      record.responseBodyError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  async flushOpenRecords() {
-    for (const [requestId, record] of Array.from(this.records.entries())) {
-      record.endTimestamp = record.endTimestamp || record.responseTimestamp || record.startTimestamp;
-      record.finishedReason = record.finishedReason || 'incomplete';
-      this.finalizeRecord(requestId, record);
-    }
-
-    await this.waitForPendingFinalizations();
-  }
-
-  async waitForPendingFinalizations() {
-    while (this.pendingFinalizations.size > 0) {
-      await Promise.allSettled(Array.from(this.pendingFinalizations));
-    }
-  }
-
-  async buildHar() {
-    await this.flushOpenRecords();
-    this.completedEntries.sort((first, second) => (first._sequence || 0) - (second._sequence || 0));
-    for (const entry of this.completedEntries) {
-      delete entry._sequence;
-    }
-
-    return {
-      log: {
-        version: '1.2',
-        creator: {
-          name: 'myhar',
-          version: chrome.runtime.getManifest().version
-        },
-        pages: [
-          {
-            startedDateTime: this.pageStartedDateTime,
-            id: this.pageRef,
-            title: this.tab.title || this.tab.url || `Tab ${this.tab.id}`,
-            pageTimings: {
-              onContentLoad: -1,
-              onLoad: -1
-            },
-            _tabId: this.tab.id,
-            _url: this.tab.url || ''
-          }
-        ],
-        entries: this.completedEntries
-      }
-    };
-  }
-
-  isQuiet(now, idleMs) {
-    return this.records.size === 0 && this.pendingFinalizations.size === 0 && now - this.lastActivityAt >= idleMs;
-  }
-
-  getUiStatus() {
-    const entryCount = this.completedEntries.length;
-    const openCount = this.records.size;
-    const suffix = `${entryCount} complete, ${openCount} active`;
-
-    if (this.detached) {
-      return `Detached (${suffix})`;
-    }
-
-    if (this.status === 'capturing' || this.status === 'reloaded' || this.status === 'navigated') {
-      return `Capturing (${suffix})`;
-    }
-
-    if (this.status === 'attached') {
-      return `Attached (${suffix})`;
-    }
-
-    return `${this.status} (${suffix})`;
-  }
-
-  async detachSafely() {
-    if (!this.attached || this.detached) {
-      return;
-    }
-
-    try {
-      await chromeCall(chrome.debugger.sendCommand, { tabId: this.tab.id }, 'Network.disable', {});
-    } catch (error) {
-      logLine(`Network.disable failed for tab ${this.tab.id}: ${error.message}`);
-    }
-
-    try {
-      await chromeCall(chrome.debugger.detach, { tabId: this.tab.id });
-      this.detached = true;
-      this.status = 'detached';
-      logLine(`Detached debugger from tab ${this.tab.id}.`);
-    } catch (error) {
-      logLine(`Detach failed for tab ${this.tab.id}: ${error.message}`);
-    }
-  }
-}
-
-function applyRequestExtraInfo(record, params) {
-  record.requestHeaders = {
-    ...record.requestHeaders,
-    ...clonePlainObject(params.headers || {})
-  };
-  record.requestHeadersText = params.headersText || record.requestHeadersText;
-}
-
-function applyResponseExtraInfo(record, params) {
-  record.responseHeaders = {
-    ...record.responseHeaders,
-    ...clonePlainObject(params.headers || {})
-  };
-  record.responseStatusCode = params.statusCode || record.responseStatusCode;
-  record.responseHeadersText = params.headersText || record.responseHeadersText;
-}
-
-function buildHarEntry(record, pageRef) {
-  const request = record.request || {};
-  const response = record.response || {};
-  const requestUrl = request.url || '';
-  const responseHeaders = record.responseHeaders || response.headers || {};
-  const requestHeaders = record.requestHeaders || request.headers || {};
-  const start = record.startTimestamp || 0;
-  const responseStart = record.responseTimestamp || record.endTimestamp || start;
-  const end = record.endTimestamp || responseStart;
-  const totalTime = Math.max(0, Math.round((end - start) * 1000));
-  const waitTime = Math.max(0, Math.round((responseStart - start) * 1000));
-  const receiveTime = Math.max(0, Math.round((end - responseStart) * 1000));
-  const status = normalizeStatus(record.responseStatusCode || response.status || (record.failed ? 0 : 0));
-  const mimeType = response.mimeType || headerValue(responseHeaders, 'content-type') || '';
-
-  const content = {
-    size: Number.isFinite(record.responseBodySize) && record.responseBodySize !== null
-      ? record.responseBodySize
-      : record.encodedDataLength || Number(response.encodedDataLength) || -1,
-    mimeType
-  };
-
-  if (typeof record.responseBodyText === 'string') {
-    content.text = record.responseBodyText;
-    if (record.responseBodyBase64Encoded) {
-      content.encoding = 'base64';
-    }
-  }
-
-  if (record.responseBodyError) {
-    content._harzipBodyError = record.responseBodyError;
-  }
-
-  if (record.responseBodyOmittedReason) {
-    content._harzipBodyOmittedReason = record.responseBodyOmittedReason;
-  }
-
-  const entry = {
-    pageref: pageRef,
-    startedDateTime: record.wallTime ? new Date(record.wallTime * 1000).toISOString() : new Date().toISOString(),
-    time: totalTime,
-    request: {
-      method: request.method || 'GET',
-      url: requestUrl,
-      httpVersion: 'HTTP/1.1',
-      cookies: parseRequestCookies(requestHeaders),
-      headers: objectToHarHeaders(requestHeaders),
-      queryString: parseQueryString(requestUrl),
-      headersSize: -1,
-      bodySize: requestPostBodySize(record)
-    },
-    response: {
-      status,
-      statusText: response.statusText || record.errorText || '',
-      httpVersion: response.protocol || 'HTTP/1.1',
-      cookies: parseResponseCookies(responseHeaders),
-      headers: objectToHarHeaders(responseHeaders),
-      content,
-      redirectURL: record.redirectedTo || headerValue(responseHeaders, 'location') || '',
-      headersSize: -1,
-      bodySize: record.encodedDataLength || -1,
-      _fromDiskCache: Boolean(response.fromDiskCache),
-      _fromServiceWorker: Boolean(response.fromServiceWorker),
-      _remoteIPAddress: response.remoteIPAddress || '',
-      _remotePort: response.remotePort || ''
-    },
-    cache: {},
-    timings: {
-      blocked: -1,
-      dns: -1,
-      connect: -1,
-      send: 0,
-      wait: waitTime,
-      receive: receiveTime,
-      ssl: -1
-    },
-    _resourceType: record.type || '',
-    _requestId: record.requestId || '',
-    _loaderId: record.loaderId || '',
-    _documentURL: record.documentURL || '',
-    _frameId: record.frameId || '',
-    _finishedReason: record.finishedReason || '',
-    _failed: Boolean(record.failed),
-    _canceled: Boolean(record.canceled),
-    _errorText: record.errorText || ''
-  };
-
-  if (record.includeRequestBodies !== false && record.requestPostData) {
-    entry.request.postData = {
-      mimeType: headerValue(requestHeaders, 'content-type') || '',
-      text: record.requestPostData
-    };
-  }
-
-  if (record.requestPostDataError) {
-    entry.request._harzipPostDataError = record.requestPostDataError;
-  }
-
-  entry._sequence = record.sequence || 0;
-
-  if (record.initiator) {
-    entry._initiator = record.initiator;
-  }
-
-  return entry;
-}
-
-async function buildCaptureZip(coordinator) {
-  const rootName = `${ROOT_PREFIX}_${formatTimestampForFileName(coordinator.startedAt)}`;
-  const files = [];
-  const completedAt = new Date();
-  const captureManifest = {
-    generated_at: completedAt.toISOString(),
-    completed_at: completedAt.toISOString(),
-    duration_ms: Math.max(0, completedAt.getTime() - coordinator.startedAt.getTime()),
-    tool: 'myhar',
-    version: chrome.runtime.getManifest().version,
-    mode: coordinator.mode,
-    status: 'completed',
-    local_only: true,
-    response_bodies_collected: coordinator.includeResponseBodies,
-    max_response_body_bytes: coordinator.maxResponseBodyBytes,
-    request_bodies_included: coordinator.includeRequestBodies,
-    entries_total: 0,
-    captures: [],
-    skipped_tabs: coordinator.skippedTabs.map((skipped) => ({
-      tab_id: skipped.tab.id,
-      tab_title: skipped.tab.title || '',
-      url: skipped.tab.url || '',
-      status: skipped.status,
-      message: skipped.message
-    }))
-  };
-
-  let index = 1;
-  for (const session of coordinator.sessions.values()) {
-    const lastRuntimeStatus = session.status || '';
-    const wasDetachedBeforeExport = Boolean(session.detached);
-    const har = await session.buildHar();
-    const tab = session.tab;
-    const entryCount = har.log.entries.length;
-    const fileName = `${String(index).padStart(3, '0')}_${safeHostFromUrl(tab.url)}_${tab.id}.har`;
-    const path = `${rootName}/tabs/${fileName}`;
-    const harText = `${JSON.stringify(har, null, 2)}\n`;
-
-    files.push({ path, data: textToBytes(harText) });
-    captureManifest.entries_total += entryCount;
-    captureManifest.captures.push({
-      file: `tabs/${fileName}`,
-      tab_id: tab.id,
-      tab_title: tab.title || '',
-      url: tab.url || '',
-      mode: coordinator.mode,
-      status: 'completed',
-      last_runtime_status: lastRuntimeStatus,
-      detached_before_export: wasDetachedBeforeExport,
-      entries: entryCount,
-      started_at: session.startedAt.toISOString(),
-      completed_at: completedAt.toISOString()
-    });
-    session.status = 'completed';
-    index += 1;
-  }
-
-  files.unshift({
-    path: `${rootName}/manifest.json`,
-    data: textToBytes(`${JSON.stringify(captureManifest, null, 2)}\n`)
-  });
-
-  const zipBytes = await createZip(files);
-  return {
-    fileName: `${rootName}.zip`,
-    bytes: zipBytes,
-    manifest: captureManifest
-  };
 }
 
 async function downloadZip(zipFile) {
@@ -866,95 +384,6 @@ function showExportLink(zipFile, url) {
   elements.downloadLink.textContent = zipFile.fileName;
   elements.exportDetails.textContent = `${zipFile.manifest.captures.length} HAR file(s), ${formatBytes(zipFile.bytes.length)}.`;
   elements.exportCard.hidden = false;
-}
-
-async function createZip(files) {
-  const fileRecords = [];
-  const chunks = [];
-  let offset = 0;
-
-  for (const file of files) {
-    const nameBytes = textToBytes(file.path);
-    const data = file.data;
-    const compressed = await maybeDeflateRaw(data);
-    const dataToWrite = compressed.data;
-    const compressionMethod = compressed.method;
-    const crc = crc32(data);
-    const dosDateTime = getDosDateTime(new Date());
-    const localHeader = new Uint8Array(30 + nameBytes.length);
-    const view = new DataView(localHeader.buffer);
-
-    view.setUint32(0, 0x04034b50, true);
-    view.setUint16(4, 20, true);
-    view.setUint16(6, 0x0800, true);
-    view.setUint16(8, compressionMethod, true);
-    view.setUint16(10, dosDateTime.time, true);
-    view.setUint16(12, dosDateTime.date, true);
-    view.setUint32(14, crc, true);
-    view.setUint32(18, dataToWrite.length, true);
-    view.setUint32(22, data.length, true);
-    view.setUint16(26, nameBytes.length, true);
-    view.setUint16(28, 0, true);
-    localHeader.set(nameBytes, 30);
-
-    chunks.push(localHeader, dataToWrite);
-    fileRecords.push({
-      path: file.path,
-      nameBytes,
-      crc,
-      size: data.length,
-      compressedSize: dataToWrite.length,
-      compressionMethod,
-      localHeaderOffset: offset,
-      dosDateTime
-    });
-    offset += localHeader.length + dataToWrite.length;
-  }
-
-  const centralDirectoryOffset = offset;
-
-  for (const record of fileRecords) {
-    const centralHeader = new Uint8Array(46 + record.nameBytes.length);
-    const view = new DataView(centralHeader.buffer);
-
-    view.setUint32(0, 0x02014b50, true);
-    view.setUint16(4, 20, true);
-    view.setUint16(6, 20, true);
-    view.setUint16(8, 0x0800, true);
-    view.setUint16(10, record.compressionMethod, true);
-    view.setUint16(12, record.dosDateTime.time, true);
-    view.setUint16(14, record.dosDateTime.date, true);
-    view.setUint32(16, record.crc, true);
-    view.setUint32(20, record.compressedSize, true);
-    view.setUint32(24, record.size, true);
-    view.setUint16(28, record.nameBytes.length, true);
-    view.setUint16(30, 0, true);
-    view.setUint16(32, 0, true);
-    view.setUint16(34, 0, true);
-    view.setUint16(36, 0, true);
-    view.setUint32(38, 0, true);
-    view.setUint32(42, record.localHeaderOffset, true);
-    centralHeader.set(record.nameBytes, 46);
-
-    chunks.push(centralHeader);
-    offset += centralHeader.length;
-  }
-
-  const centralDirectorySize = offset - centralDirectoryOffset;
-  const endRecord = new Uint8Array(22);
-  const endView = new DataView(endRecord.buffer);
-
-  endView.setUint32(0, 0x06054b50, true);
-  endView.setUint16(4, 0, true);
-  endView.setUint16(6, 0, true);
-  endView.setUint16(8, fileRecords.length, true);
-  endView.setUint16(10, fileRecords.length, true);
-  endView.setUint32(12, centralDirectorySize, true);
-  endView.setUint32(16, centralDirectoryOffset, true);
-  endView.setUint16(20, 0, true);
-
-  chunks.push(endRecord);
-  return concatenateUint8Arrays(chunks);
 }
 
 function ensureDebuggerEventListener() {
@@ -1175,12 +604,15 @@ async function startRefreshCapture() {
     return;
   }
 
+  const networkQuietTimeoutSeconds = validateNetworkQuietTimeout();
+  if (networkQuietTimeoutSeconds === null) return;
+
   activeCapture = new CaptureCoordinator({
     mode: 'refresh',
     includeRequestBodies: elements.includeRequestBodies.checked,
     includeResponseBodies: elements.includeResponseBodies.checked,
     maxResponseBodyBytes: getMaxResponseBodyBytes(),
-    captureLimitSeconds: getCaptureLimitSeconds()
+    networkQuietTimeoutSeconds
   });
 
   try {
@@ -1212,8 +644,7 @@ async function startLiveCapture() {
     mode: 'live',
     includeRequestBodies: elements.includeRequestBodies.checked,
     includeResponseBodies: elements.includeResponseBodies.checked,
-    maxResponseBodyBytes: getMaxResponseBodyBytes(),
-    captureLimitSeconds: getCaptureLimitSeconds()
+    maxResponseBodyBytes: getMaxResponseBodyBytes()
   });
 
   try {
@@ -1245,6 +676,10 @@ async function startUrlListCapture() {
     return;
   }
 
+  // Validate and snapshot before opening tabs or performing other async work.
+  const networkQuietTimeoutSeconds = validateNetworkQuietTimeout();
+  if (networkQuietTimeoutSeconds === null) return;
+
   const createdTabs = [];
   const navigationTargets = new Map();
 
@@ -1271,7 +706,7 @@ async function startUrlListCapture() {
       includeRequestBodies: elements.includeRequestBodies.checked,
       includeResponseBodies: elements.includeResponseBodies.checked,
       maxResponseBodyBytes: getMaxResponseBodyBytes(),
-      captureLimitSeconds: getCaptureLimitSeconds(),
+      networkQuietTimeoutSeconds,
       navigationTargets
     });
 
@@ -1346,13 +781,21 @@ function getMaxResponseBodyBytes() {
   return 26214400;
 }
 
-function getCaptureLimitSeconds() {
-  const selectedValue = Number(elements.captureLimitSeconds.value);
-  if (Number.isFinite(selectedValue) && selectedValue >= MIN_CAPTURE_LIMIT_SECONDS) {
-    return selectedValue;
+function validateNetworkQuietTimeout() {
+  const input = elements.networkQuietTimeoutSeconds;
+  const seconds = parseNetworkQuietTimeoutSeconds(input.value);
+  const message = seconds === null ? 'Enter a positive, finite number of seconds for network quiet.' : '';
+  input.setCustomValidity(message);
+  input.setAttribute('aria-invalid', String(seconds === null));
+  elements.networkQuietError.textContent = message;
+  elements.networkQuietError.hidden = seconds !== null;
+  if (seconds === null) {
+    input.closest('details').open = true;
+    setStatus(message);
+    input.focus();
+    input.reportValidity();
   }
-
-  return 30;
+  return seconds;
 }
 
 function attachmentFailureStatus(message) {
@@ -1379,7 +822,7 @@ function setBusyState(isBusy, mode = '') {
   elements.includeRequestBodies.disabled = isBusy;
   elements.includeResponseBodies.disabled = isBusy;
   elements.maxResponseBodyBytes.disabled = isBusy;
-  elements.captureLimitSeconds.disabled = isBusy;
+  elements.networkQuietTimeoutSeconds.disabled = isBusy;
   elements.stopExport.disabled = !isBusy;
   elements.stopDiscard.disabled = !isBusy;
 
@@ -1394,9 +837,40 @@ function setBusyState(isBusy, mode = '') {
   }
 }
 
+function stopReasonLabel(reason) {
+  return {
+    network_quiet: 'stopped by network quiet',
+    manual_export: 'manual export', debugger_detached_by_user: 'debugger canceled by user',
+    all_targets_closed: 'all target tabs closed', debugger_detached: 'all debuggers detached',
+    memory_safety_limit: 'memory safety limit reached', workspace_closed: 'workspace closed'
+  }[reason] || reason;
+}
+
 function setStatus(message) {
   elements.statusText.textContent = message;
   logLine(message);
+}
+
+function showAutoCaptureNotice(mode, quietSeconds) {
+  elements.autoCaptureNotice.hidden = true;
+  if (!isNetworkQuietMode(mode) || autoCaptureNoticeAcknowledged) return;
+  try {
+    if (window.localStorage.getItem(AUTO_CAPTURE_NOTICE_KEY) === 'acknowledged') return;
+  } catch {
+    // Optional UX persistence must never prevent capture startup.
+  }
+  elements.autoCaptureNoticeText.textContent = `This capture will stop and export automatically after ${quietSeconds} seconds of network quiet.`;
+  elements.autoCaptureNotice.hidden = false;
+}
+
+function acknowledgeAutoCaptureNotice() {
+  autoCaptureNoticeAcknowledged = true;
+  elements.autoCaptureNotice.hidden = true;
+  try {
+    window.localStorage.setItem(AUTO_CAPTURE_NOTICE_KEY, 'acknowledged');
+  } catch {
+    // Dismiss for this workspace even when localStorage is unavailable.
+  }
 }
 
 function showError(error) {
@@ -1430,251 +904,6 @@ function isCapturableUrl(url) {
   }
 }
 
-function objectToHarHeaders(headersObject) {
-  return Object.entries(headersObject || {}).map(([name, value]) => ({
-    name,
-    value: String(value)
-  }));
-}
-
-function parseQueryString(url) {
-  try {
-    const parsedUrl = new URL(url);
-    return Array.from(parsedUrl.searchParams.entries()).map(([name, value]) => ({ name, value }));
-  } catch {
-    return [];
-  }
-}
-
-function parseRequestCookies(headersObject) {
-  const cookieHeader = headerValue(headersObject, 'cookie');
-  if (!cookieHeader) {
-    return [];
-  }
-
-  return cookieHeader
-    .split(';')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => {
-      const separatorIndex = part.indexOf('=');
-      if (separatorIndex === -1) {
-        return { name: part, value: '' };
-      }
-
-      return {
-        name: part.slice(0, separatorIndex).trim(),
-        value: part.slice(separatorIndex + 1).trim()
-      };
-    });
-}
-
-function parseResponseCookies(headersObject) {
-  const cookies = [];
-
-  for (const [name, value] of Object.entries(headersObject || {})) {
-    if (name.toLowerCase() !== 'set-cookie') {
-      continue;
-    }
-
-    const values = Array.isArray(value) ? value : splitSetCookieHeader(String(value));
-    for (const cookieValue of values) {
-      const cookie = parseSetCookie(cookieValue);
-      if (cookie) {
-        cookies.push(cookie);
-      }
-    }
-  }
-
-  return cookies;
-}
-
-function splitSetCookieHeader(header) {
-  const result = [];
-  let current = '';
-  let inExpires = false;
-
-  for (let index = 0; index < header.length; index += 1) {
-    const char = header[index];
-    const lookback = header.slice(Math.max(0, index - 8), index + 1).toLowerCase();
-
-    if (lookback.endsWith('expires=')) {
-      inExpires = true;
-    }
-
-    if (inExpires && char === ';') {
-      inExpires = false;
-    }
-
-    if (char === ',' && !inExpires) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-
-  if (current.trim()) {
-    result.push(current.trim());
-  }
-
-  return result;
-}
-
-function parseSetCookie(cookieString) {
-  const parts = cookieString.split(';').map((part) => part.trim()).filter(Boolean);
-  if (parts.length === 0) {
-    return null;
-  }
-
-  const [nameValue, ...attributes] = parts;
-  const separatorIndex = nameValue.indexOf('=');
-  if (separatorIndex === -1) {
-    return null;
-  }
-
-  const cookie = {
-    name: nameValue.slice(0, separatorIndex),
-    value: nameValue.slice(separatorIndex + 1)
-  };
-
-  for (const attribute of attributes) {
-    const [rawName, ...rawValueParts] = attribute.split('=');
-    const attributeName = rawName.toLowerCase();
-    const attributeValue = rawValueParts.join('=');
-
-    if (attributeName === 'path') {
-      cookie.path = attributeValue;
-    } else if (attributeName === 'domain') {
-      cookie.domain = attributeValue;
-    } else if (attributeName === 'expires') {
-      const expiresDate = new Date(attributeValue);
-      if (!Number.isNaN(expiresDate.getTime())) {
-        cookie.expires = expiresDate.toISOString();
-      }
-    } else if (attributeName === 'httponly') {
-      cookie.httpOnly = true;
-    } else if (attributeName === 'secure') {
-      cookie.secure = true;
-    } else if (attributeName === 'samesite') {
-      cookie.sameSite = attributeValue;
-    }
-  }
-
-  return cookie;
-}
-
-function headerValue(headersObject, headerName) {
-  const target = headerName.toLowerCase();
-
-  for (const [name, value] of Object.entries(headersObject || {})) {
-    if (name.toLowerCase() === target) {
-      return Array.isArray(value) ? value.join('\n') : String(value);
-    }
-  }
-
-  return '';
-}
-
-function requestPostBodySize(record) {
-  if (record.requestPostData) {
-    return textToBytes(record.requestPostData).length;
-  }
-
-  if (record.requestHasPostData) {
-    return -1;
-  }
-
-  return 0;
-}
-
-function normalizeStatus(status) {
-  const numericStatus = Number(status);
-  if (Number.isFinite(numericStatus)) {
-    return numericStatus;
-  }
-  return 0;
-}
-
-function safeHostFromUrl(url) {
-  try {
-    const parsedUrl = new URL(url || '');
-    return sanitizeFileName(parsedUrl.hostname || 'tab');
-  } catch {
-    return 'tab';
-  }
-}
-
-function sanitizeFileName(value) {
-  return String(value || 'file')
-    .replace(/[^a-z0-9._-]+/gi, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 80) || 'file';
-}
-
-function formatTimestampForFileName(date) {
-  const pad = (value) => String(value).padStart(2, '0');
-  return [
-    date.getFullYear(),
-    pad(date.getMonth() + 1),
-    pad(date.getDate())
-  ].join('-') + '_' + [
-    pad(date.getHours()),
-    pad(date.getMinutes()),
-    pad(date.getSeconds())
-  ].join('-');
-}
-
-function clonePlainObject(value) {
-  return JSON.parse(JSON.stringify(value || {}));
-}
-
-function textToBytes(text) {
-  return new TextEncoder().encode(text);
-}
-
-async function maybeDeflateRaw(data) {
-  if (typeof CompressionStream !== 'function') {
-    return { data, method: 0 };
-  }
-
-  try {
-    const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('deflate-raw'));
-    const compressedBuffer = await new Response(stream).arrayBuffer();
-    const compressedData = new Uint8Array(compressedBuffer);
-    if (compressedData.length > 0 && compressedData.length < data.length) {
-      return { data: compressedData, method: 8 };
-    }
-  } catch (error) {
-    logLine(`ZIP compression unavailable, storing files without compression: ${error.message}`);
-  }
-
-  return { data, method: 0 };
-}
-
-function concatenateUint8Arrays(chunks) {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  return result;
-}
-
-function base64DecodedSize(value) {
-  const normalized = String(value || '').replace(/\s+/g, '');
-  if (!normalized) {
-    return 0;
-  }
-
-  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
-  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
-}
-
 function formatBytes(byteLength) {
   if (byteLength < 1024) {
     return `${byteLength} B`;
@@ -1688,53 +917,15 @@ function formatBytes(byteLength) {
   return `${(kib / 1024).toFixed(1)} MiB`;
 }
 
-function getDosDateTime(date) {
-  const year = Math.max(1980, date.getFullYear());
-  const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
-  const dosDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
-  return { time: dosTime, date: dosDate };
-}
+elements.acknowledgeAutoCaptureNotice.addEventListener('click', acknowledgeAutoCaptureNotice);
 
-function crc32(data) {
-  let crc = 0xffffffff;
-
-  for (let index = 0; index < data.length; index += 1) {
-    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ data[index]) & 0xff];
-  }
-
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-
-  for (let index = 0; index < 256; index += 1) {
-    let value = index;
-    for (let bit = 0; bit < 8; bit += 1) {
-      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
-    }
-    table[index] = value >>> 0;
-  }
-
-  return table;
-})();
-
-function chromeCall(apiFunction, ...args) {
-  return new Promise((resolve, reject) => {
-    try {
-      apiFunction(...args, (result) => {
-        const error = chrome.runtime.lastError;
-        if (error) {
-          reject(new Error(error.message));
-          return;
-        }
-        resolve(result);
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
+elements.networkQuietTimeoutSeconds.defaultValue = String(DEFAULT_NETWORK_QUIET_TIMEOUT_SECONDS);
+elements.networkQuietTimeoutSeconds.addEventListener('input', () => {
+  elements.networkQuietTimeoutSeconds.setCustomValidity('');
+  elements.networkQuietTimeoutSeconds.removeAttribute('aria-invalid');
+  elements.networkQuietError.hidden = true;
+  elements.networkQuietError.textContent = '';
+});
 
 elements.refreshTabs.addEventListener('click', () => {
   loadTabs().catch((error) => showError(error));
@@ -1763,13 +954,13 @@ elements.startLive.addEventListener('click', () => {
 
 elements.stopExport.addEventListener('click', () => {
   if (activeCapture) {
-    activeCapture.stopAndExport('manual stop').catch((error) => showError(error));
+    activeCapture.stopAndExport('manual_export').catch((error) => showError(error));
   }
 });
 
 elements.stopDiscard.addEventListener('click', () => {
   if (activeCapture) {
-    activeCapture.stopWithoutExport('manual stop').catch((error) => showError(error));
+    activeCapture.stopWithoutExport('manual_discard').catch((error) => showError(error));
   }
 });
 
@@ -1782,8 +973,11 @@ if (DEBUG_LOG_ENABLED) {
 }
 
 window.addEventListener('beforeunload', () => {
-  if (activeCapture && !activeCapture.stopped) {
-    activeCapture.stopWithoutExport('workspace closed').catch(() => {});
+  if (activeCapture) {
+    // Best effort only: Chrome can destroy this page before async export finishes.
+    // No background context is introduced to keep a closed workspace alive.
+    if (!activeCapture.stopped) activeCapture.stopAndExport('workspace_closed').catch(() => {});
+    for (const session of activeCapture.sessions.values()) session.detachOnWorkspaceClose();
   }
 
   if (activeExportObjectUrl) {

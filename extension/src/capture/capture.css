@@ -136,6 +136,7 @@ h2 {
 
 button,
 select,
+input[type="number"],
 textarea {
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -177,6 +178,7 @@ button.danger {
 
 button:disabled,
 textarea:disabled,
+input[type="number"]:disabled,
 select:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -234,8 +236,28 @@ textarea::placeholder {
   gap: 8px;
 }
 
+.option-row .setting-with-help {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.setting-with-help .hint {
+  flex-basis: 100%;
+}
+
 input[type="checkbox"] {
   accent-color: var(--accent);
+}
+
+input[type="number"] {
+  width: 9rem;
+  max-width: 100%;
+  padding: 8px 10px;
+}
+
+.setting-error {
+  flex-basis: 100%;
+  color: var(--danger);
 }
 
 .status-card,
@@ -252,8 +274,31 @@ input[type="checkbox"] {
 }
 
 .export-card[hidden],
+.auto-capture-notice[hidden],
 .log-card[hidden] {
   display: none;
+}
+
+.auto-capture-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--panel-strong);
+  line-height: 1.45;
+}
+
+.auto-capture-notice > div {
+  flex: 1 1 320px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.auto-capture-notice p {
+  margin: 8px 0 0;
 }
 
 .export-card a {

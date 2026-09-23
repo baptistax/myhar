@@ -1,7 +1,12 @@
 .DS_Store
 Thumbs.db
 *.zip
+*.har
+*.log
+*.tmp
 node_modules/
 dist/
 build/
 coverage/
+.tmp-chrome/
+.tmp-validation/

@@ -16,7 +16,13 @@ Export multiple HAR files locally into one ZIP archive.
 
 myhar helps developers, QA analysts, support teams, and authorized security reviewers export network activity from selected browser tabs or pasted URL lists into HAR files grouped inside one ZIP archive.
 
-The extension only captures tabs explicitly selected by the user or tabs opened after the user starts URL-list capture. Captures are started and stopped manually from a visible capture workspace, except refresh and URL-list captures that auto-export after network quiet or the configured duration limit. All HAR and ZIP files are generated locally in the browser and downloaded to the user's machine. No captured data is uploaded, synced, sold, shared, or transferred to any external server.
+The extension only captures tabs explicitly selected by the user or tabs opened after the user starts URL-list capture. Refresh and URL-list captures auto-export after a configurable continuous network quiet interval (15 seconds by default), even when long-lived requests remain open. Actual captured network activity, including received data, resets the interval. Graceful export preserves unfinished requests and waits for pending body collection. There is no total capture-duration cutoff. Live Capture is manually controlled, with graceful automatic export when all targets detach or an internal memory safety limit is reached. All HAR and ZIP files are generated locally in the browser and downloaded to the user's machine. No captured data is uploaded, synced, sold, shared, or transferred to any external server.
+
+Exports provide Chrome DevTools-aligned HAR output, including network/page timings, distinct redirects, cache semantics and Service Worker metadata when available. Do not claim byte-for-byte equivalence with DevTools. Only HTTP/HTTPS entries are exported. Per-tab detach reasons, excluded schemes, body failures, visibility diagnostics and the capture stop reason are recorded in the local ZIP manifest.
+
+Advanced settings offer 1, 5, 25 (default), or 50 MiB per response, plus No myhar limit; browser/CDP buffer limits may still apply. A separate shared safety limit stops capture at 10,000 records or 256 MiB of retained body representation. One detached tab does not stop unrelated captures. Switching the workspace into the background is supported and does not trigger a stop. Closing the workspace permits only a best-effort export; no background process is added to keep it alive.
+
+Version remains `0.1.6` for this development phase. The engine remains `chrome.debugger`, with the existing `tabs`, `debugger`, and `downloads` permissions. No host permissions, service worker, content scripts, DevTools page, remote code, framework, or runtime dependencies are introduced.
 
 Use cases:
 
@@ -85,6 +91,11 @@ Avoid words that imply hidden monitoring or abuse:
 - [ ] Live capture works with manual navigation.
 - [ ] Debugger detaches after export.
 - [ ] Debugger detaches when the workspace closes.
+- [ ] One detached target leaves other captures running; all detached targets trigger graceful export.
+- [ ] Manifest records the actual detach reason and a persistent capture stop reason.
+- [ ] Safety-limit export and download-link fallback work.
+- [ ] Advanced settings show an editable Network quiet timeout (15 seconds by default, Refresh/URL-list only) and No myhar limit with their helper text.
+- [ ] Cache hits have valid timings and zero network transfer; HAR sizes do not conflate decoded and transferred bytes.
 - [ ] ZIP opens in Windows Explorer, macOS Finder, and 7-Zip.
 - [ ] Internal manifest contains full URLs.
 - [ ] Internal manifest marks successful captures as `completed`.
